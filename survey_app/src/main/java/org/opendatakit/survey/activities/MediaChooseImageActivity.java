@@ -22,6 +22,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore.Images;
 import android.widget.Toast;
+
+import org.apache.commons.io.FileUtils;
 import org.opendatakit.activities.BaseActivity;
 import org.opendatakit.consts.IntentConsts;
 import org.opendatakit.logging.WebLogger;
@@ -31,6 +33,7 @@ import org.opendatakit.utilities.ODKFileUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Simple shim for media interactions.
@@ -71,7 +74,7 @@ public class MediaChooseImageActivity extends BaseActivity {
 
     if (appName == null) {
       throw new IllegalArgumentException("Expected " + IntentConsts.INTENT_KEY_APP_NAME
-            + " key in intent bundle. Not found.");
+              + " key in intent bundle. Not found.");
     }
 
     if (tableId == null) {
@@ -95,7 +98,7 @@ public class MediaChooseImageActivity extends BaseActivity {
 
     if (uriFragmentNewFileBase == null) {
       throw new IllegalArgumentException("Expected " + URI_FRAGMENT_NEW_FILE_BASE
-          + " key in intent bundle. Not found.");
+              + " key in intent bundle. Not found.");
     }
 
     Intent i = new Intent(Intent.ACTION_GET_CONTENT);
@@ -104,13 +107,13 @@ public class MediaChooseImageActivity extends BaseActivity {
       startActivityForResult(i, ACTION_CODE);
     } catch (ActivityNotFoundException e) {
       Toast.makeText(this,
-          getString(R.string.activity_not_found, Intent.ACTION_GET_CONTENT + " " + MEDIA_CLASS),
-          Toast.LENGTH_SHORT).show();
+              getString(R.string.activity_not_found, Intent.ACTION_GET_CONTENT + " " + MEDIA_CLASS),
+              Toast.LENGTH_SHORT).show();
       setResult(Activity.RESULT_CANCELED);
       finish();
     }
   }
-  
+
   @Override
   public String getAppName() {
     return appName;
@@ -143,7 +146,49 @@ public class MediaChooseImageActivity extends BaseActivity {
 
     // get gp of chosen file
     Uri selectedMedia = intent.getData();
-    String sourceMediaPath = MediaUtils.getPathFromUri(this, selectedMedia, Images.Media.DATA);
+
+    File tempOutputFile;
+    String scheme = selectedMedia.getScheme();
+    String uriType = getContentResolver().getType(selectedMedia);
+    String imageSuffix = "." + uriType.split("/")[1];
+
+    // create a temp file (in the cache dir) to copy contents of
+    // the selected image if needed i.e. if the selectedMedia URI
+    // is a content URI
+    try {
+      tempOutputFile = File.createTempFile("tempImage", imageSuffix, getCacheDir());
+    } catch (Exception e) {
+      WebLogger.getLogger(appName).e(t,
+              "Failed to create temp file in folder: " + getCacheDir());
+      Toast.makeText(this, R.string.media_save_failed, Toast.LENGTH_SHORT).show();
+      setResult(Activity.RESULT_CANCELED);
+      finish();
+      return;
+    }
+
+    String sourceMediaPath;
+    boolean isContentUri = scheme.equals("content");
+
+    if (isContentUri) {
+      try {
+        // if the uri is a content uri, copy the contents of the selected media to
+        // the tempOutputFile we just created, and use the absolute path of this temp file
+        // as the sourceMediaPath
+        InputStream inputContent = getContentResolver().openInputStream(selectedMedia);
+        FileUtils.copyInputStreamToFile(inputContent, tempOutputFile);
+        sourceMediaPath = tempOutputFile.getAbsolutePath();
+      } catch (Exception e) {
+        Toast.makeText(this, "DEBUGG: Unable to read file URI to convert to input stream",
+                Toast.LENGTH_SHORT).show();
+        // keep the image as a captured image so user can choose it.
+        setResult(Activity.RESULT_CANCELED);
+        finish();
+        return;
+      }
+    } else {
+      sourceMediaPath = MediaUtils.getPathFromUri(this, selectedMedia, Images.Media.DATA);
+    }
+
     File sourceMedia = new File(sourceMediaPath);
     String extension = sourceMediaPath.substring(sourceMediaPath.lastIndexOf("."));
 
@@ -157,6 +202,9 @@ public class MediaChooseImageActivity extends BaseActivity {
       setResult(Activity.RESULT_CANCELED);
       finish();
       return;
+    } finally {
+      // delete the tempOutputFile we created
+      tempOutputFile.delete();
     }
 
     WebLogger.getLogger(appName).i(t, "copied " + sourceMedia.getAbsolutePath() + " to " + newMedia.getAbsolutePath());
